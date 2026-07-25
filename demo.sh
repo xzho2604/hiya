@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # demo.sh — end-to-end narrative demo of hiya.
 #
-# Two sessions share one home: they race for a task (exactly one wins), get
-# wakes routed to the right inboxes, collide on a memory file (CAS lands one
-# write, journals the other), curation folds the journal, and a dead
-# session's lease is reaped. Runs in ./demo-home (wiped at start).
+# Two sessions share one home: they race for a task (exactly one wins, and
+# gets an isolated git worktree for it), get wakes routed to the right
+# inboxes, collide on a memory file (CAS lands one write, journals the
+# other), curation folds the journal, and a dead session's lease is reaped —
+# its half-done worktree survives for the next claimant, who must commit or
+# --discard before the task can go done. Runs in ./demo-home (wiped at start).
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -20,6 +22,15 @@ mkdir -p "$HIYA_HOME/data"
 printf 't1\tqueued\tShip the release notes\nt2\tqueued\tTriage the flaky test\nt3\tqueued\tRefactor the parser\n' \
   > "$HIYA_HOME/data/backlog.md"
 cat "$HIYA_HOME/data/backlog.md"
+
+step "Seed a toy git repo — HIYA_REPO gives every claim an isolated worktree"
+export GIT_AUTHOR_NAME=demo GIT_AUTHOR_EMAIL=demo@hiya \
+       GIT_COMMITTER_NAME=demo GIT_COMMITTER_EMAIL=demo@hiya
+repo="$HIYA_HOME/repo"
+git -c init.defaultBranch=main init -q "$repo"
+git -C "$repo" commit -q --allow-empty -m "initial commit"
+export HIYA_REPO="$repo"
+printf 'HIYA_REPO=%s\n' "$HIYA_REPO"
 
 step "Two sessions join; only the FIRST joiner bootstraps the home"
 out=$("$bin/hiya-join.sh")
@@ -47,10 +58,17 @@ if [ "$wins" -ne 1 ]; then
   exit 1
 fi
 if [ "$ra" -eq 0 ]; then winner=$s1 loser=$s2; else winner=$s2 loser=$s1; fi
-printf '%s won the race; %s lost cleanly\n' "$winner" "$loser"
+printf '%s won the race; %s lost cleanly (only the winner got a worktree)\n' \
+  "$winner" "$loser"
 
-step "The loser picks up a different task instead"
+step "The loser picks up a different task instead — and gets its worktree"
 run "$bin/hiya-claim.sh" "$loser" t2
+
+step "The loser starts on t2 in its isolated worktree (uncommitted so far)"
+printf 'flaky test root cause: timezone assumption\n' \
+  > "$HIYA_HOME/work/t2/findings.txt"
+printf 'wrote work/t2/findings.txt (not committed)\n'
+run "$bin/hiya-workspace.sh" t2 --status
 
 step "Wakes are enqueued, then the elected watcher routes them"
 run "$bin/hiya-wake.sh" t1 "ci: build green"
@@ -88,6 +106,40 @@ printf 'aged %s heartbeat to January 2020\n' "$loser"
 run "$bin/hiya-heartbeat.sh" "$winner"
 printf -- '--- backlog after reap (t2 back to queued) ---\n'
 cat "$HIYA_HOME/data/backlog.md"
+
+step "The crashed session's worktree survived the reap — work is not lost"
+run "$bin/hiya-workspace.sh" t2 --status
+printf -- '--- work/t2/findings.txt ---\n'
+cat "$HIYA_HOME/work/t2/findings.txt"
+
+step "The next claimant re-attaches to the surviving workspace"
+run "$bin/hiya-claim.sh" "$winner" t2
+printf 'findings.txt is still there: "%s"\n' "$(cat "$HIYA_HOME/work/t2/findings.txt")"
+
+step "Done with uncommitted work is refused — nothing is silently lost"
+if "$bin/hiya-release.sh" "$winner" t2 --done; then
+  printf 'demo: BROKEN INVARIANT: dirty done must be refused\n' >&2
+  exit 1
+else
+  printf '(exit %s: dirty workspace; the lease and the work are untouched)\n' "$?"
+fi
+
+step "Commit the inherited work, then done tears the worktree down cleanly"
+git -C "$HIYA_HOME/work/t2" add findings.txt
+git -C "$HIYA_HOME/work/t2" commit -q -m "triage: flaky test is a timezone bug"
+run "$bin/hiya-release.sh" "$winner" t2 --done
+printf 'branch hiya/t2 kept in the repo: %s\n' \
+  "$(git -C "$repo" log --oneline -1 hiya/t2)"
+
+step "t1 went nowhere — scribbles are discarded explicitly, never silently"
+printf 'dead end\n' > "$HIYA_HOME/work/t1/scratch.txt"
+if "$bin/hiya-release.sh" "$winner" t1 --done 2>/dev/null; then
+  printf 'demo: BROKEN INVARIANT: dirty done must be refused\n' >&2
+  exit 1
+else
+  printf '(exit %s: refused again — so we opt in to losing the scratch)\n' "$?"
+fi
+run "$bin/hiya-release.sh" "$winner" t1 --done --discard
 
 step "A late session joins and sees the digest of what remains"
 run "$bin/hiya-join.sh"

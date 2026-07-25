@@ -17,6 +17,8 @@ HIYA_HOME="${HIYA_HOME:-./home}"
 HIYA_SESSION_TTL="${HIYA_SESSION_TTL:-120}"  # secs before a silent session is dead
 HIYA_LOCK_TTL="${HIYA_LOCK_TTL:-30}"         # grace for a lock dir with no pid file yet
 HIYA_LOCK_WAIT="${HIYA_LOCK_WAIT:-10}"       # secs to wait for a busy lock
+# shellcheck disable=SC2034
+HIYA_REPO="${HIYA_REPO:-}"                   # git repo for per-task worktrees (empty = off)
 
 # ---------------------------------------------------------------- primitives
 
@@ -143,6 +145,19 @@ hiya_sessions_dir() { printf '%s/state/sessions' "$HIYA_HOME"; }
 hiya_session_dir()  { printf '%s/state/sessions/%s' "$HIYA_HOME" "$1"; }
 hiya_lease_file()   { printf '%s/state/leases/%s' "$HIYA_HOME" "$1"; }
 hiya_backlog()      { printf '%s/data/backlog.md' "$HIYA_HOME"; }
+
+hiya_workspace_rec() { printf '%s/state/workspaces/%s' "$HIYA_HOME" "$1"; }
+
+workspace_field() {
+  # workspace_field <task-id> <key> — print one field of a registry record
+  awk -F= -v k="$2" '$1 == k { print substr($0, length(k) + 2) }' \
+    "$(hiya_workspace_rec "$1")" 2>/dev/null
+}
+
+workspace_dirty() {
+  # a worktree is dirty if it has uncommitted changes or untracked files
+  [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]
+}
 
 hiya_layout() {
   # create the home layout; never clobbers existing data (a pre-seeded
