@@ -16,6 +16,7 @@ is not a live session. The backlog state stays "claimed".
 
 exit status:
   0  transferred
+  1  usage error, or the lease could not be written (it stays with <from-sid>)
   2  refused: authority or liveness check failed
 
 environment:
@@ -48,10 +49,15 @@ transfer_impl() {
     printf 'hiya-transfer: refused: no live session %s\n' "$to" >&2
     return 2
   fi
-  {
+  if ! {
     printf 'owner=%s\n' "$to"
     printf 'claimed_at=%s\n' "$(hiya_now)"
-  } | atomic_write "$(hiya_lease_file "$task")"
+  } | atomic_write "$(hiya_lease_file "$task")"; then
+    # the old lease is intact (the write is atomic): say so, do not claim success
+    printf 'hiya-transfer: cannot write the lease for %s; it stays with %s\n' \
+      "$task" "$from" >&2
+    return 1
+  fi
   printf '%s transferred %s -> %s\n' "$task" "$from" "$to"
 }
 

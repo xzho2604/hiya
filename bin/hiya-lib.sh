@@ -53,9 +53,14 @@ hiya_hash() {
 }
 
 atomic_write() {
-  # atomic_write <dest> — write stdin to dest atomically (tmp file + rename)
+  # atomic_write <dest> — write stdin to dest atomically (tmp file + rename).
+  # The temp file is hidden, so a writer killed mid-write never leaves
+  # something a `dir/*` glob (leases, workspaces) mistakes for a record.
   local dest=$1 tmp
-  tmp="$dest.tmp.$$"
+  case $dest in
+    */*) tmp="${dest%/*}/.${dest##*/}.tmp.$$" ;;
+    *) tmp=".$dest.tmp.$$" ;;
+  esac
   if ! cat > "$tmp"; then
     rm -f "$tmp"
     return 1
@@ -113,8 +118,13 @@ cas_commit() {
 
 hiya_lk_class=   # this home's pinned backend, resolved once per process
 hiya_lk_tool=    # kernel backend: the tool that works here (lockf | flock)
-hiya_lk_nonce=   # token backend: tells this process from an old one with its pid
+hiya_lk_flock=   # kernel backend: which flock(1) this is (util-linux | basic)
 hiya_lk_held=()  # kernel backend: name of the lock held on each pool fd
+# token backend: tells this process from a dead one that had its pid. Seeded
+# HERE, once, and never lazily: subshells share $$, so siblings that each made
+# up their own nonce would take each other for a dead predecessor and steal a
+# live token.
+hiya_lk_nonce=${hiya_lk_nonce:-$RANDOM$RANDOM}
 
 hiya_lk_open() {
   # hiya_lk_open <fd> <file> — open <file> for append on pool fd <fd>. eval
@@ -131,7 +141,8 @@ hiya_unlocked() {
 }
 
 hiya_lk_flock_poll() {
-  # hiya_lk_flock_poll <fd> <wait-seconds> — BusyBox flock has no -w: poll -n
+  # hiya_lk_flock_poll <fd> <wait-seconds> — BusyBox flock has no -w: poll -n.
+  # It exits 1 for busy and broken alike, so here a broken lock is a timeout.
   local deadline=$(( SECONDS + $2 ))
   while :; do
     flock -n "$1" 2> /dev/null && return 0
@@ -154,16 +165,24 @@ hiya_lk_tool_try() {
       ;;
     flock)
       command -v flock > /dev/null 2>&1 || return 2
+      if [ -z "$hiya_lk_flock" ]; then
+        case $(flock --version 2> /dev/null) in
+          *util-linux*) hiya_lk_flock=util-linux ;;
+          *) hiya_lk_flock=basic ;;   # BusyBox: no -w, no -E
+        esac
+      fi
+      if [ "$hiya_lk_flock" = basic ]; then
+        hiya_lk_flock_poll "$2" "$3"
+        return $?
+      fi
+      # -E tells "held by someone else" (75) from a real failure, which must
+      # surface as one instead of looking like a busy lock
       if [ "$3" -eq 0 ]; then
         flock -n -E 75 "$2" 2> /dev/null
       else
         flock -w "$3" -E 75 "$2" 2> /dev/null
       fi
       rc=$?
-      if [ "$rc" -ne 0 ] && [ "$rc" -ne 75 ]; then
-        hiya_lk_flock_poll "$2" "$3"   # not util-linux: no -w / -E
-        return $?
-      fi
       ;;
     *) return 2 ;;
   esac
@@ -312,7 +331,6 @@ lock_acquire() {
     hiya_lk_kernel_acquire "$name" "$wait"
     return $?
   fi
-  [ -n "$hiya_lk_nonce" ] || hiya_lk_nonce="$(hiya_now)-$RANDOM"
   deadline=$(( SECONDS + wait ))
   while :; do
     hiya_lk_token_try "$name" && return 0
@@ -332,7 +350,7 @@ lock_release() {
         return 0
       fi
     done
-  elif [ -n "$hiya_lk_nonce" ]; then
+  elif [ "$hiya_lk_class" = token ]; then
     mv -f "$HIYA_HOME/state/locks/$name.token/held.$$.$hiya_lk_nonce" \
       "$HIYA_HOME/state/locks/$name.token/free" 2> /dev/null
   fi

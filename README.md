@@ -107,13 +107,14 @@ the watcher tracks progress with a cursor file.
 the inbox of the live session leasing its task, or the home-level
 `state/unrouted/` while the task has no live owner. (A session that releases
 or hands over a task keeps the wakes it had already received.) Records are
-written to a
-hidden temp file and renamed into place, and the cursor moves past a record
-only once it is written; if a record can be written nowhere, the pass fails
-and the next one retries it. Parked wakes follow their task: a won claim
-adopts the task's unrouted wakes into the claimant's inbox, and reaping a
-session re-homes the wakes it never drained — to the task's live owner if
-the task was handed over, else to `state/unrouted/`. Delivery is
+written to a hidden temp file and renamed into place, and the cursor moves
+past a record only once it is written; if a record can be written nowhere,
+the pass fails and the next one retries it. Parked wakes follow their task:
+a won claim adopts the task's unrouted wakes into the claimant's inbox, and
+reaping a session re-homes the wakes it never drained — to the task's live
+owner if the task was handed over, else to `state/unrouted/`. Every
+heartbeat pass retries what an earlier one could not move (and says so), and
+delivers any parked wake whose task has a live owner by now. Delivery is
 **at-least-once**: a watcher that dies between writing a record and saving
 the cursor routes that record again, and a wake a session read but did not
 drain before it was reaped is seen again by the task's next owner. The seq
@@ -153,7 +154,7 @@ Every tool is a standalone script in `bin/` with `--help`; all honor
 | `hiya-lib.sh` | Shared helpers (sourced, not run): `with_lock` over the kernel/token lock backends, `hiya_unlocked`, atomic write, CAS commit, wake-record and path/lease/backlog accessors. |
 | `hiya-join.sh` | Register a session: allocate a sid, create the session dir + heartbeat; the first joiner bootstraps the home layout under the bootstrap lock. Prints a digest (live sessions, leases, queued tasks, unrouted wakes). |
 | `hiya-add.sh <task-id> <title>` | Add a `queued` task under the backlog lock — the only way rows enter `backlog.md`. Refuses (exit 2) a task id that already exists; rejects (exit 1) ids that are not simple tokens and titles that are not a single tab-free line. |
-| `hiya-heartbeat.sh <sid>` | Touch own heartbeat, then reap sessions whose heartbeat is older than `HIYA_SESSION_TTL` (default 120s): leases released back to `queued`, dir archived to `state/sessions/.dead/`, undrained wakes re-homed by task. Also sweeps orphan leases (owner has no session). |
+| `hiya-heartbeat.sh <sid>` | Touch own heartbeat, then reap sessions whose heartbeat is older than `HIYA_SESSION_TTL` (default 120s): dir archived to `state/sessions/.dead/`, leases released back to `queued`, undrained wakes re-homed by task (retried every pass until they move). Also sweeps orphan leases (owner has no session) and delivers parked wakes whose task now has a live owner. |
 | `hiya-claim.sh <sid> <task-id>` | Atomic claim-on-dispatch. Exit 0 = won; exit 1 = lost ("already claimed by \<sid\>"). With `HIYA_REPO`: provisions the task worktree (on the kept branch, if one exists), or re-attaches to a surviving one; provisioning failure rolls the claim back. A won claim adopts the task's unrouted wakes. |
 | `hiya-release.sh <sid> <task-id> [--done [--discard]]` | Release a lease back to `queued` (workspace untouched), or mark `done` (workspace torn down, branch kept). Refuses (exit 2) if the caller doesn't hold the lease; refuses the whole done (exit 3) if the worktree is dirty, unless `--discard` (destructive) is given. |
 | `hiya-transfer.sh <from> <to> <task-id>` | Explicit lease handoff; refuses if `from` isn't the owner or `to` isn't live. |
@@ -213,7 +214,8 @@ claim, clean teardown at done, dirty refusal + `--discard`, survival across
 reap with re-attach, transfer needing no workspace work, and `HIYA_REPO`
 unset leaving no workspace artifacts). Regression tests pin the correctness
 bugs found in review: mutual exclusion when contenders race for a crashed
-holder's lock, on both lock backends (14); reaping under GNU *and* BSD
+holder's lock, and between sibling subshells, on both lock backends (14);
+reaping under GNU *and* BSD
 `stat`, each emulated with a PATH shim (15); watcher heartbeat, step-down,
 and takeover (16); no wake dropped when a write fails (17); a reaped
 session's wakes reaching the next claimant, orphan-lease sweep, and the
@@ -239,8 +241,12 @@ branch kept (19); lock fds not leaking into long-lived children (20); and
   live can be lost; use `hiya-add.sh`.
 - Digest reads (join) are advisory and lock-free; all mutations go through
   the per-resource locks. Lock order where more than one is held:
-  sessions → backlog → workspaces. Wake records move between inboxes and
+  sessions → backlog → workspaces, and watcher → wake (the watcher holds its
+  election lock across each drain). Wake records move between inboxes and
   `state/unrouted/` lock-free, by atomic rename.
+- A lock belongs to the process that took it. Subshells share their parent's
+  pid, so take and release a lock in the same process, never from a
+  backgrounded subshell that may outlive its parent.
 - `HIYA_REPO` needs `git` on the PATH and a repo with at least one commit
   (new branches fork from its current `HEAD`). Everything else is bash +
   coreutils + the platform's lock tool.

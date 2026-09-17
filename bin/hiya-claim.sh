@@ -78,11 +78,20 @@ claim_impl() {
     printf 'hiya-claim: %s is %s, not queued\n' "$task" "$st" >&2
     return 1
   fi
-  {
+  # lease first, and only a written lease may flip the backlog: "claimed"
+  # without a lease file is a task nothing would ever requeue
+  if ! {
     printf 'owner=%s\n' "$sid"
     printf 'claimed_at=%s\n' "$(hiya_now)"
-  } | atomic_write "$(hiya_lease_file "$task")"
-  backlog_set_state "$task" claimed
+  } | atomic_write "$(hiya_lease_file "$task")"; then
+    printf 'hiya-claim: cannot write the lease for %s\n' "$task" >&2
+    return 1
+  fi
+  if ! backlog_set_state "$task" claimed; then
+    rm -f "$(hiya_lease_file "$task")"
+    printf 'hiya-claim: cannot update the backlog for %s\n' "$task" >&2
+    return 1
+  fi
   printf '%s claimed by %s\n' "$task" "$sid"
 }
 
@@ -129,12 +138,17 @@ provision_impl() {
   mkdir -p "$HIYA_HOME/work" "${rec%/*}"
   wpath="$(cd "$HIYA_HOME/work" && pwd)/$task"
   worktree_attach "$repo_abs" "$wpath" "$branch" || return 1
-  {
+  if ! {
     printf 'path=%s\n' "$wpath"
     printf 'branch=%s\n' "$branch"
     printf 'repo=%s\n' "$repo_abs"
     printf 'created_at=%s\n' "$(hiya_now)"
-  } | atomic_write "$rec"
+  } | atomic_write "$rec"; then
+    # an unrecorded worktree would block every later claim of this task
+    hiya_unlocked git -C "$repo_abs" worktree remove --force "$wpath" 2> /dev/null
+    printf 'hiya-claim: cannot write the workspace record for %s\n' "$task" >&2
+    return 1
+  fi
   printf 'provisioned workspace %s (branch %s)\n' "$wpath" "$branch"
 }
 

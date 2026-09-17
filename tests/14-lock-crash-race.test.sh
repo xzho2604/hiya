@@ -3,7 +3,8 @@
 # a holder is killed -9 while it holds the lock, then N separate processes
 # contend for it: critical sections must never overlap, and every contender
 # must get its turn. Runs on the home's default lock backend and on the
-# forced token fallback, and checks that a LIVE holder is never preempted.
+# forced token fallback, and checks that a LIVE holder is never preempted —
+# not by a waiter, and not by a sibling subshell sharing its pid.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/hiya-test.XXXXXX")
@@ -95,12 +96,27 @@ live_holder_contract() {
     || fail "$label: no-wait acquire of a free lock failed"
 }
 
+sibling_subshells() {
+  # subshells share $$ with their parent: a holder identified by pid must not
+  # be mistaken, by its own sibling, for a dead predecessor to take over from
+  local label=$1 n
+  rm -f "$work/overlaps" "$work/completed"
+  rm -rf "$work/inside.d"
+  "$here/lock-siblings.sh" "$work" 2> "$work/sib.err" \
+    || fail "$label: sibling subshells failed: $(cat "$work/sib.err")"
+  [ ! -e "$work/overlaps" ] || fail "$label: sibling subshells held the lock at the same time"
+  n=$(wc -l < "$work/completed")
+  [ "$n" -eq 2 ] || fail "$label: $n of 2 sibling subshells ran their critical section"
+}
+
 export HIYA_HOME="$work/home-default"
 crash_rounds default
 live_holder_contract default
+sibling_subshells default
 
 export HIYA_HOME="$work/home-token" HIYA_LOCK_BACKEND=token
 crash_rounds token
 live_holder_contract token
+sibling_subshells token
 
 printf 'PASS: lock crash race\n'

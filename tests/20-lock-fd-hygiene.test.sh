@@ -10,11 +10,12 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/hiya-test.XXXXXX")
 export HIYA_HOME="$work/home"
 export HOOK_PIDFILE="$work/hook.pids"
 cleanup() {
-  # stop only the sleeps our own hook started, by their recorded pids
+  # stop only the sleeps our own hook started: by their recorded pids, and
+  # only while that pid still IS a sleep (BusyBox ps has no -p: use /proc)
   local p
   if [ -f "$HOOK_PIDFILE" ]; then
     while read -r p; do
-      case $(ps -p "$p" -o comm= 2> /dev/null) in
+      case $(ps -p "$p" -o comm= 2> /dev/null || cat "/proc/$p/comm" 2> /dev/null) in
         *sleep) kill "$p" 2> /dev/null ;;
       esac
     done < "$HOOK_PIDFILE"
@@ -32,10 +33,12 @@ git -c init.defaultBranch=main init -q "$repo" || fail "git init failed"
 git -C "$repo" commit -q --allow-empty -m init || fail "seed commit failed"
 export HIYA_REPO="$repo"
 
-# a hook that leaves a long-lived process behind, as a daemon would
+# a hook that leaves a long-lived process behind, as a daemon would. It must
+# outlive every assertion below even on a slow host, or they prove nothing;
+# cleanup stops it by its recorded pid.
 cat > "$repo/.git/hooks/post-checkout" <<'EOF'
 #!/bin/sh
-sleep 8 > /dev/null 2>&1 &
+sleep 60 > /dev/null 2>&1 &
 echo "$!" >> "$HOOK_PIDFILE"
 EOF
 chmod +x "$repo/.git/hooks/post-checkout"
@@ -54,5 +57,7 @@ out=$(HIYA_LOCK_WAIT=1 "$bin/hiya-claim.sh" "$s1" t2 2>&1) \
   || fail "a process started by git kept hiya's locks: $out"
 out=$(HIYA_LOCK_WAIT=1 "$bin/hiya-release.sh" "$s1" t2 --done 2>&1) \
   || fail "locks still held after the second claim: $out"
+kill -0 "$hp" 2> /dev/null \
+  || fail "the hook's process exited before the assertions ran: they proved nothing"
 
 printf 'PASS: lock fd hygiene\n'
