@@ -85,13 +85,15 @@ teardown_impl() {
       printf 'hiya-release: commit it there, or force teardown with --done --discard\n' >&2
       return 3
     fi
+    # git runs without our lock fds (hiya_unlocked): whatever it spawns must
+    # not outlive this critical section holding the backlog lock
     if [ -n "$discard" ]; then
-      git -C "$wrepo" worktree remove --force "$wpath" || return 1
+      hiya_unlocked git -C "$wrepo" worktree remove --force "$wpath" || return 1
     else
-      git -C "$wrepo" worktree remove "$wpath" || return 1
+      hiya_unlocked git -C "$wrepo" worktree remove "$wpath" || return 1
     fi
   else
-    git -C "$wrepo" worktree prune 2>/dev/null || true
+    hiya_unlocked git -C "$wrepo" worktree prune 2>/dev/null || true
   fi
   rm -f "$rec"
   printf 'workspace %s removed (branch %s kept)\n' "$wpath" "$wbranch"
@@ -109,7 +111,10 @@ release_impl() {
       "$task" "$owner" "$sid" >&2
     return 2
   fi
-  if [ "$new_state" = "done" ]; then
+  # no record, no workspace work: a home without HIYA_REPO never even touches
+  # the workspaces lock. (Safe to check first: we hold the task's lease and
+  # the backlog lock, so nothing can be provisioning this task right now.)
+  if [ "$new_state" = "done" ] && [ -f "$(hiya_workspace_rec "$task")" ]; then
     ws_rc=0
     with_lock workspaces teardown_impl || ws_rc=$?
     [ "$ws_rc" -eq 0 ] || return "$ws_rc"

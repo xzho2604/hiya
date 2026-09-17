@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # pinned: the repo's `# shellcheck disable=SC2329` directives need >= 0.11.0
+  # (ubuntu runners ship 0.9.0, macOS runners ship none)
+  SHELLCHECK_VERSION: v0.11.0
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # stock macOS: /bin/bash 3.2 and nothing but the system PATH
+          - name: macOS (stock bash 3.2)
+            os: macos-latest
+            run: env PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash
+            shellcheck_asset: darwin.aarch64
+            shellcheck_sha256: 56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
+          # GNU coreutils + util-linux flock(1)
+          - name: Ubuntu
+            os: ubuntu-latest
+            run: bash
+            shellcheck_asset: linux.x86_64
+            shellcheck_sha256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          ${{ matrix.run }} -c 'echo "bash $BASH_VERSION"; git --version'
+          if stat --version > /dev/null 2>&1; then stat --version | head -1; else echo "stat: BSD"; fi
+          ls -l /usr/bin/lockf 2>/dev/null || echo "no /usr/bin/lockf"
+          command -v flock || echo "no flock(1)"
+
+      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }}
+        run: |
+          set -euo pipefail
+          asset="shellcheck-${SHELLCHECK_VERSION}.${{ matrix.shellcheck_asset }}.tar.xz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/$asset"
+          echo "${{ matrix.shellcheck_sha256 }}  $RUNNER_TEMP/$asset" | shasum -a 256 -c -
+          tar -xJf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+
+      - name: shellcheck
+        run: shellcheck -x bin/*.sh demo.sh tests/*.sh
+
+      # Both OSes must really get kernel locks; a silent drop to the token
+      # fallback would leave the primary lock path untested.
+      - name: Detected lock backend is kernel
+        run: |
+          home=$(mktemp -d)
+          HIYA_HOME="$home" ${{ matrix.run }} tests/lib-call.sh lock_acquire probe 0
+          backend=$(cat "$home/state/locks/.backend")
+          echo "detected lock backend: $backend"
+          [ "$backend" = kernel ]
+
+      - name: Tests (detected lock backend)
+        run: ${{ matrix.run }} tests/run.sh
+
+      - name: Tests (token fallback)
+        run: HIYA_LOCK_BACKEND=token ${{ matrix.run }} tests/run.sh
+
+      - name: Demo
+        run: ${{ matrix.run }} ./demo.sh

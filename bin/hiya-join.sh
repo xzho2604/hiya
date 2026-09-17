@@ -16,7 +16,8 @@ so exactly one bootstrap happens no matter how many sessions join at once.
 A backlog seeded before the first join is kept, not clobbered.
 
 Prints the allocated session id (first line, "sid: <sid>") followed by a
-digest of the home: live sessions, current leases, and queued tasks.
+digest of the home: live sessions, current leases, queued tasks, and — if
+there are any — the number of unrouted wakes.
 
 environment:
   HIYA_HOME  home directory (default ./home)
@@ -82,5 +83,14 @@ fi
 printf 'queued tasks:\n'
 awk -F '\t' '$2 == "queued" { printf "  %s\t%s\n", $1, $3; n++ }
              END { if (!n) print "  (none)" }' "$(hiya_backlog)"
+
+n=0
+for f in "$(hiya_unrouted_dir)"/*; do
+  [ -f "$f" ] || continue
+  n=$((n + 1))
+done
+if [ "$n" -gt 0 ]; then
+  printf 'unrouted wakes: %s (hiya-inbox.sh --unrouted; a task'\''s next claimant adopts its own)\n' "$n"
+fi
 
 exit 0

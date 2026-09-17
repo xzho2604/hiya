@@ -18,7 +18,7 @@ git -C "$repo" commit -q --allow-empty -m init || fail "seed commit failed"
 export HIYA_REPO="$repo"
 
 s1=$(join)
-printf 't1\tqueued\tMessy task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Messy task" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s1" t1 > /dev/null 2>&1 || fail "claim failed"
 wt="$HIYA_HOME/work/t1"
 printf 'half-done\n' > "$wt/wip.txt"   # untracked file = dirty

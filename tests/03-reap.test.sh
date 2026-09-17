@@ -11,7 +11,7 @@ join() { "$bin/hiya-join.sh" | awk '/^sid:/ { print $2 }'; }
 
 s1=$(join)
 s2=$(join)
-printf 't1\tqueued\tDoomed task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Doomed task" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s2" t1 > /dev/null || fail "claim failed"
 
 touch -t 202001010000 "$HIYA_HOME/state/sessions/$s2/heartbeat"

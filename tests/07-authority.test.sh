@@ -12,7 +12,7 @@ owner_of() { awk -F= '$1 == "owner" { print $2 }' "$HIYA_HOME/state/leases/$1"; 
 
 s1=$(join)
 s2=$(join)
-printf 't1\tqueued\tGuarded task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Guarded task" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s1" t1 > /dev/null || fail "claim failed"
 
 # non-owner release refused

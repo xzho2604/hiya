@@ -19,7 +19,7 @@ export HIYA_REPO="$repo"
 
 s1=$(join)
 s2=$(join)
-printf 't1\tqueued\tSurvivor task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Survivor task" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s2" t1 > /dev/null 2>&1 || fail "claim failed"
 wt="$HIYA_HOME/work/t1"
 printf 'half-done work\n' > "$wt/progress.txt"   # uncommitted, pre-crash
