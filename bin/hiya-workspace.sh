@@ -76,13 +76,13 @@ discard_impl() {
   wrepo=$(workspace_field "$task" repo)
   wbranch=$(workspace_field "$task" branch)
   if [ -d "$wpath" ]; then
-    if ! git -C "$wrepo" worktree remove --force "$wpath" 2>/dev/null; then
+    if ! hiya_unlocked git -C "$wrepo" worktree remove --force "$wpath" 2>/dev/null; then
       # repo gone or worktree unregistered: fall back to deleting the dir
       rm -rf "$wpath"
-      git -C "$wrepo" worktree prune 2>/dev/null || true
+      hiya_unlocked git -C "$wrepo" worktree prune 2>/dev/null || true
     fi
   else
-    git -C "$wrepo" worktree prune 2>/dev/null || true
+    hiya_unlocked git -C "$wrepo" worktree prune 2>/dev/null || true
   fi
   rm -f "$rec"
   printf 'workspace for %s discarded (branch %s kept)\n' "$task" "$wbranch"

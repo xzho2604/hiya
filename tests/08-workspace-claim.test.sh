@@ -18,7 +18,7 @@ git -C "$repo" commit -q --allow-empty -m init || fail "seed commit failed"
 export HIYA_REPO="$repo"
 
 s1=$(join)
-printf 't1\tqueued\tWorktree task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Worktree task" > /dev/null || fail "add failed"
 out=$("$bin/hiya-claim.sh" "$s1" t1 2>&1) || fail "claim failed: $out"
 printf '%s\n' "$out" | grep -q "provisioned workspace" \
   || fail "no provision message: $out"

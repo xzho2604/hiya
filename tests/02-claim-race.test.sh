@@ -11,7 +11,7 @@ join() { "$bin/hiya-join.sh" | awk '/^sid:/ { print $2 }'; }
 
 s1=$(join)
 s2=$(join)
-printf 't1\tqueued\tContested task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Contested task" > /dev/null || fail "add failed"
 
 "$bin/hiya-claim.sh" "$s1" t1 > "$work/a" 2>&1 &
 pa=$!

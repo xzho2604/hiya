@@ -18,7 +18,7 @@ git -C "$repo" commit -q --allow-empty -m init || fail "seed commit failed"
 export HIYA_REPO="$repo"
 
 s1=$(join)
-printf 't1\tqueued\tClean finish\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Clean finish" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s1" t1 > /dev/null 2>&1 || fail "claim failed"
 
 # commit some work so the branch has something to keep

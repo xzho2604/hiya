@@ -3,9 +3,10 @@
 #
 # Two sessions share one home: they race for a task (exactly one wins, and
 # gets an isolated git worktree for it), get wakes routed to the right
-# inboxes, collide on a memory file (CAS lands one write, journals the
-# other), curation folds the journal, and a dead session's lease is reaped —
-# its half-done worktree survives for the next claimant, who must commit or
+# inboxes (a wake for a task nobody owns waits for its next claimant),
+# collide on a memory file (CAS lands one write, journals the other),
+# curation folds the journal, and a dead session's lease is reaped — its
+# half-done worktree survives for the next claimant, who must commit or
 # --discard before the task can go done. Runs in ./demo-home (wiped at start).
 set -u
 
@@ -17,26 +18,33 @@ rm -rf "$HIYA_HOME"
 step() { printf '\n== %s\n' "$*"; }
 run()  { printf '$ %s\n' "$*"; "$@"; }
 
-step "Seed a backlog (one task per line: id<TAB>state<TAB>title)"
-mkdir -p "$HIYA_HOME/data"
-printf 't1\tqueued\tShip the release notes\nt2\tqueued\tTriage the flaky test\nt3\tqueued\tRefactor the parser\n' \
-  > "$HIYA_HOME/data/backlog.md"
-cat "$HIYA_HOME/data/backlog.md"
-
 step "Seed a toy git repo — HIYA_REPO gives every claim an isolated worktree"
 export GIT_AUTHOR_NAME=demo GIT_AUTHOR_EMAIL=demo@hiya \
        GIT_COMMITTER_NAME=demo GIT_COMMITTER_EMAIL=demo@hiya
 repo="$HIYA_HOME/repo"
+mkdir -p "$HIYA_HOME"
 git -c init.defaultBranch=main init -q "$repo"
 git -C "$repo" commit -q --allow-empty -m "initial commit"
 export HIYA_REPO="$repo"
 printf 'HIYA_REPO=%s\n' "$HIYA_REPO"
 
-step "Two sessions join; only the FIRST joiner bootstraps the home"
+step "The first session joins — and, being first, bootstraps the home"
 out=$("$bin/hiya-join.sh")
 printf '%s\n' "$out"
 s1=$(printf '%s\n' "$out" | awk '/^sid:/ { print $2 }')
-printf -- '---\n'
+
+step "Tasks enter the backlog through hiya-add.sh (never by hand: it is lock-protected)"
+run "$bin/hiya-add.sh" t1 "Ship the release notes"
+run "$bin/hiya-add.sh" t2 "Triage the flaky test"
+run "$bin/hiya-add.sh" t3 "Refactor the parser"
+if "$bin/hiya-add.sh" t3 "Refactor the parser, again"; then
+  printf 'demo: BROKEN INVARIANT: a duplicate task id must be refused\n' >&2
+  exit 1
+else
+  printf '(exit %s: duplicate id refused)\n' "$?"
+fi
+
+step "A second session joins; its digest shows the queued tasks"
 out=$("$bin/hiya-join.sh")
 printf '%s\n' "$out"
 s2=$(printf '%s\n' "$out" | awk '/^sid:/ { print $2 }')
@@ -73,14 +81,20 @@ run "$bin/hiya-workspace.sh" t2 --status
 step "Wakes are enqueued, then the elected watcher routes them"
 run "$bin/hiya-wake.sh" t1 "ci: build green"
 run "$bin/hiya-wake.sh" t2 "review requested"
-run "$bin/hiya-wake.sh" t9 "orphan ping (nobody leases t9)"
+run "$bin/hiya-wake.sh" t3 "design doc updated (nobody owns t3 yet)"
 run "$bin/hiya-watch.sh" "$winner" --once
 
-step "Each session drains its own inbox (orphan fell to the watcher)"
+step "Each session drains its own inbox; the unowned wake is parked, not lost"
 printf '[%s inbox]\n' "$winner"
 run "$bin/hiya-inbox.sh" "$winner" --drain
 printf '[%s inbox]\n' "$loser"
 run "$bin/hiya-inbox.sh" "$loser" --drain
+printf '[unrouted]\n'
+run "$bin/hiya-inbox.sh" --unrouted
+
+step "Whoever claims t3 next adopts the wake that was waiting for it"
+run "$bin/hiya-claim.sh" "$winner" t3
+run "$bin/hiya-inbox.sh" "$winner" --drain
 
 step "Both sessions edit the same memory — CAS lands one, journals the other"
 h0=$("$bin/hiya-mem-write.sh" --show-hash notes)

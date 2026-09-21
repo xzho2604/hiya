@@ -19,7 +19,7 @@ export HIYA_REPO="$repo"
 
 s1=$(join)
 s2=$(join)
-printf 't1\tqueued\tHandoff task\n' > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Handoff task" > /dev/null || fail "add failed"
 "$bin/hiya-claim.sh" "$s1" t1 > /dev/null 2>&1 || fail "claim failed"
 wt="$HIYA_HOME/work/t1"
 printf 's1 started this\n' > "$wt/handoff.txt"

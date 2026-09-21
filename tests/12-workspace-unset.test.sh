@@ -13,8 +13,8 @@ join() { "$bin/hiya-join.sh" | awk '/^sid:/ { print $2 }'; }
 unset HIYA_REPO
 
 s1=$(join)
-printf 't1\tqueued\tPlain task\nt2\tqueued\tOther task\n' \
-  > "$HIYA_HOME/data/backlog.md"
+"$bin/hiya-add.sh" t1 "Plain task" > /dev/null || fail "add t1 failed"
+"$bin/hiya-add.sh" t2 "Other task" > /dev/null || fail "add t2 failed"
 
 out=$("$bin/hiya-claim.sh" "$s1" t1 2>&1) || fail "claim failed: $out"
 printf '%s\n' "$out" | grep -qi "workspace" && fail "claim mentioned workspace: $out"
@@ -32,6 +32,7 @@ st=$(awk -F '\t' '$1 == "t1" { print $2 }' "$HIYA_HOME/data/backlog.md")
 # no workspace artifacts anywhere in the home
 [ ! -e "$HIYA_HOME/work" ] || fail "work/ dir created without HIYA_REPO"
 [ ! -e "$HIYA_HOME/state/workspaces" ] || fail "workspace registry created"
-[ ! -e "$HIYA_HOME/state/locks/workspaces.lock" ] || fail "workspaces lock taken"
+set -- "$HIYA_HOME/state/locks"/workspaces.*   # any backend's lock artifact
+[ ! -e "$1" ] || fail "workspaces lock taken: $1"
 
 printf 'PASS: workspace unset\n'
